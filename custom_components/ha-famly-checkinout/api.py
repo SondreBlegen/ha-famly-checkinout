@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict
 
-from .const import AUTH_URL, CALENDAR_URL, SIDEBAR_URL
+from .const import AUTH_URL, CALENDAR_URL, SIDEBAR_URL, STATE_OUTSIDE_CHILDCARE, STATE_AT_CHILDCARE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,27 +50,20 @@ class FamlyApi:
         
         headers = {"x-famly-accesstoken": self._access_token}
         try:
-            _LOGGER.debug("Fetching sidebar data to find children.")
             async with self._session.get(SIDEBAR_URL, headers=headers) as response:
                 response.raise_for_status()
                 data = await response.json()
-                
-                children = []
-                for item in data.get("items", []):
-                    if item.get("type") == "Famly.Daycare:Child":
-                        children.append({"id": item["id"], "name": item["title"]})
-                
+                children = [{"id": item["id"], "name": item["title"]} for item in data.get("items", []) if item.get("type") == "Famly.Daycare:Child"]
                 _LOGGER.info(f"Found {len(children)} children: {[c['name'] for c in children]}")
                 return children
-        except (aiohttp.ClientError, KeyError, TypeError) as err:
-            _LOGGER.error("Error fetching or parsing children list from sidebar: %s", err)
+        except Exception:
+            _LOGGER.exception("Error fetching or parsing children list from sidebar")
             return None
 
     async def get_child_status(self, child_id: str) -> Optional[str]:
         """Fetch the latest check-in/check-out status for a child."""
-        if not self._access_token:
-            if not await self.authenticate():
-                return None
+        if not self._access_token and not await self.authenticate():
+            return None
 
         today = datetime.utcnow().strftime('%Y-%m-%d')
         params = {"type": "RANGE", "day": today, "to": today, "childId": child_id}
@@ -90,11 +83,18 @@ class FamlyApi:
                 else:
                     response.raise_for_status()
                     data = await response.json()
-                
+
+                # *** START OF THE FIX ***
+                # If the API returns an empty list, it means no events today.
+                if not data:
+                    _LOGGER.debug(f"No calendar data for child {child_id}, assuming Outside Childcare.")
+                    return STATE_OUTSIDE_CHILDCARE
+
                 latest_event_type = None
                 latest_event_time = None
-
-                if data and "days" in data[0] and data[0]["days"]:
+                
+                # Check that the data structure is as expected before accessing it
+                if "days" in data[0] and data[0]["days"]:
                     for event in data[0]["days"][0].get("events", []):
                         originator = event.get("originator", {})
                         event_type = originator.get("type")
@@ -106,9 +106,10 @@ class FamlyApi:
                                     latest_event_time = event_time
                                     latest_event_type = event_type
                 
-                from .const import STATE_AT_CHILDCARE, STATE_OUTSIDE_CHILDCARE
                 return STATE_AT_CHILDCARE if latest_event_type == "Famly.Daycare:ChildCheckin" else STATE_OUTSIDE_CHILDCARE
+                # *** END OF THE FIX ***
 
-        except aiohttp.ClientError as err:
-            _LOGGER.error("Error fetching calendar data for child %s: %s", child_id, err)
-        return None
+        except Exception:
+            # Catch ANY exception during the process and log it. This prevents the integration from crashing.
+            _LOGGER.exception(f"Error fetching calendar data for child {child_id}")
+            return None # Return None to indicate failure
