@@ -22,7 +22,7 @@ class FamlyApi:
         """Authenticate and retrieve the access token."""
         auth_payload = {
             "operationName": "Authenticate",
-            "variables": {"email": self._email, "password": self._password},
+            "variables": {"email": self._email, "password": self._password, "deviceId": "8858035b-b514-4a7e-b2e1-5e73059425ae"},
             "query": "mutation Authenticate($email: EmailAddress!, $password: Password!) { me { authenticateWithPassword(email: $email, password: $password) { ... on AuthenticationSucceeded { accessToken } } } }"
         }
         headers = {"Content-Type": "application/json"}
