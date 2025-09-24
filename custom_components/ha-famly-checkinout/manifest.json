@@ -1,0 +1,15 @@
+{
+    "domain": "famly_childcare",
+    "name": "Famly Childcare checkin/out",
+    "config_flow": true,
+    "documentation": "https://github.com/sondreblegen/ha-famly-childcare",
+    "issue_tracker": "https://github.com/sondreblegen/ha-famly-childcare/issues",
+    "codeowners": [
+        "@sondreblegen"
+    ],
+    "version": "1.0.0",
+    "iot_class": "cloud_polling",
+    "requirements": [
+        "aiohttp"
+    ]
+}
