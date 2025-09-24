@@ -45,7 +45,7 @@ async def async_setup_entry(
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
-        name="famly_childcare_sensor",
+        name="ha_famly_checkinout_sensor",
         update_method=async_update_data,
         update_interval=SCAN_INTERVAL,
     )
