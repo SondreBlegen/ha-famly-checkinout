@@ -3,10 +3,7 @@ import asyncio
 from datetime import timedelta
 import logging
 
-from homeassistant.components.binary_sensor import (
-    BinarySensorEntity,
-    BinarySensorDeviceClass,
-)
+from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -71,7 +68,8 @@ async def async_setup_entry(
 class ChildcarePresenceBinarySensor(BinarySensorEntity):
     """Binary sensor that is on when the child is at childcare."""
 
-    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    # Use custom translation for on/off labels instead of device_class defaults
+    _attr_device_class = None
 
     def __init__(self, coordinator: DataUpdateCoordinator, entry_id: str, child_id: str, child_name: str) -> None:
         self.coordinator = coordinator
@@ -83,6 +81,11 @@ class ChildcarePresenceBinarySensor(BinarySensorEntity):
             "name": f"Famly ({coordinator.hass.config_entries.async_get_entry(entry_id).data.get(CONF_EMAIL)})",
             "manufacturer": "Famly",
         }
+
+    @property
+    def translation_key(self) -> str:
+        """Use custom state labels defined in translations files."""
+        return "childcare_presence"
 
     @property
     def is_on(self) -> bool:

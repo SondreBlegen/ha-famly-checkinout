@@ -1,0 +1,13 @@
+{
+    "entity": {
+        "binary_sensor": {
+            "childcare_presence": {
+                "name": "Barnehagetilstedeværelse",
+                "state": {
+                    "on": "I barnehage",
+                    "off": "Utenfor barnehage"
+                }
+            }
+        }
+    }
+}
