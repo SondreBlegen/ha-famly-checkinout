@@ -1,7 +1,7 @@
 """Constants for the Famly Childcare integration."""
 
 DOMAIN = "ha_famly_checkinout"
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "binary_sensor"]
 
 # API Endpoints
 BASE_URL = "https://app.famly.co"
