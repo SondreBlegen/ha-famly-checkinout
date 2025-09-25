@@ -10,7 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN, CONF_CHILDREN, CONF_EMAIL, CONF_PASSWORD, STATE_OUTSIDE_CHILDCARE
+from .const import DOMAIN, CONF_CHILDREN, CONF_EMAIL, CONF_PASSWORD, STATE_OUTSIDE_CHILDCARE, STATE_AT_CHILDCARE
 from .api import FamlyApi
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,7 +69,8 @@ class ChildcareStatusSensor(SensorEntity):
         
         self._attr_name = f"Childcare Status {child_name}"
         self._attr_unique_id = f"{entry_id}_{child_id}"
-        self._attr_icon = "mdi:human-child"
+        # Icon changes based on state for better visual cue
+        self._attr_icon = None
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry_id)},
             "name": f"Famly ({coordinator.hass.config_entries.async_get_entry(entry_id).data.get(CONF_EMAIL)})",
@@ -85,3 +86,24 @@ class ChildcareStatusSensor(SensorEntity):
     def available(self) -> bool:
         """Return if entity is available."""
         return self.coordinator.last_update_success and self._child_id in self.coordinator.data
+
+    @property
+    def icon(self) -> str:
+        """Return an icon representing the child's current status."""
+        current = self.state
+        if current == STATE_AT_CHILDCARE:
+            # Filled icon when present
+            return "mdi:school"
+        # Outline when absent
+        return "mdi:school-outline"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Provide attributes that UI cards can use for styling/conditions."""
+        current = self.state
+        at_childcare = current == STATE_AT_CHILDCARE
+        # icon_color can be leveraged by some cards/themes; core may ignore it.
+        return {
+            "childcare_present": at_childcare,
+            "icon_color": "green" if at_childcare else "grey",
+        }
