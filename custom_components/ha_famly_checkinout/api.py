@@ -25,11 +25,11 @@ except ImportError:
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class FamlyApi:
     """A class for interacting with the Famly API."""
 
     def __init__(self, session: aiohttp.ClientSession, email: str, password: str):
-        """Initialize the API client."""
         self._session = session
         self._email = email
         self._password = password
@@ -37,24 +37,30 @@ class FamlyApi:
 
     async def authenticate(self) -> bool:
         """Authenticate and retrieve the access token."""
-        auth_payload = {
+        payload = {
             "operationName": "Authenticate",
-            "variables": {"email": self._email, "password": self._password, "deviceId": "8858035b-b514-4a7e-b2e1-5e73059425ae"},
-            "query": "mutation Authenticate($email: EmailAddress!, $password: Password!) { me { authenticateWithPassword(email: $email, password: $password) { ... on AuthenticationSucceeded { accessToken } } } }"
+            "variables": {
+                "email": self._email,
+                "password": self._password,
+                "deviceId": "8858035b-b514-4a7e-b2e1-5e73059425ae",
+            },
+            "query": (
+                "mutation Authenticate($email: EmailAddress!, $password: Password!) "
+                "{ me { authenticateWithPassword(email: $email, password: $password) "
+                "{ ... on AuthenticationSucceeded { accessToken } } } }"
+            ),
         }
-        headers = {"Content-Type": "application/json"}
         try:
-            async with self._session.post(AUTH_URL, json=auth_payload, headers=headers) as response:
-                response.raise_for_status()
-                data = await response.json()
-                auth_result = data.get("data", {}).get("me", {}).get("authenticateWithPassword", {})
-                if "accessToken" in auth_result:
-                    self._access_token = auth_result["accessToken"]
-                    _LOGGER.info("Successfully authenticated.")
-                    return True
-                else:
-                    _LOGGER.error("Authentication failed: %s", auth_result)
+            async with self._session.post(AUTH_URL, json=payload, headers={"Content-Type": "application/json"}) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                auth = data.get("data", {}).get("me", {}).get("authenticateWithPassword", {})
+                token = auth.get("accessToken")
+                if not token:
+                    _LOGGER.error("Authentication failed: %s", auth)
                     return False
+                self._access_token = token
+                return True
         except aiohttp.ClientError as err:
             _LOGGER.error("Error during authentication: %s", err)
             return False
@@ -64,14 +70,18 @@ class FamlyApi:
         if not self._access_token:
             _LOGGER.error("Cannot get children without an access token.")
             return None
-        
+
         headers = {"x-famly-accesstoken": self._access_token}
         try:
             async with self._session.get(SIDEBAR_URL, headers=headers) as response:
                 response.raise_for_status()
                 data = await response.json()
-                children = [{"id": item["id"], "name": item["title"]} for item in data.get("items", []) if item.get("type") == "Famly.Daycare:Child"]
-                _LOGGER.info(f"Found {len(children)} children: {[c['name'] for c in children]}")
+                children = [
+                    {"id": item["id"], "name": item["title"]}
+                    for item in data.get("items", [])
+                    if item.get("type") == "Famly.Daycare:Child"
+                ]
+                _LOGGER.info("Found %d children: %s", len(children), [c["name"] for c in children])
                 return children
         except Exception:
             _LOGGER.exception("Error fetching or parsing children list from sidebar")
@@ -82,9 +92,7 @@ class FamlyApi:
         if not self._access_token and not await self.authenticate():
             return None
 
-        # Use local date to match the daycare/day view the user sees in Famly
-        # Using UTC can shift very early/late events to an adjacent day.
-        today = datetime.utcnow().strftime('%Y-%m-%d')
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         params = {"type": "RANGE", "day": today, "to": today, "childId": child_id}
         headers = {"x-famly-accesstoken": self._access_token}
 
@@ -92,18 +100,16 @@ class FamlyApi:
             async with self._session.get(CALENDAR_URL, params=params, headers=headers) as response:
                 if response.status == 401:
                     _LOGGER.info("Access token expired. Re-authenticating...")
-                    if await self.authenticate():
-                        headers["x-famly-accesstoken"] = self._access_token
-                        async with self._session.get(CALENDAR_URL, params=params, headers=headers) as retry_response:
-                            retry_response.raise_for_status()
-                            data = await retry_response.json()
-                    else:
+                    if not await self.authenticate():
                         return None
+                    headers["x-famly-accesstoken"] = self._access_token
+                    async with self._session.get(CALENDAR_URL, params=params, headers=headers) as retry_response:
+                        retry_response.raise_for_status()
+                        data = await retry_response.json()
                 else:
                     response.raise_for_status()
                     data = await response.json()
 
-                # Robust parsing: tolerate structure/field variations
                 if not data:
                     _LOGGER.debug("Calendar empty for child %s -> Outside Childcare", child_id)
                     return STATE_OUTSIDE_CHILDCARE
@@ -112,9 +118,7 @@ class FamlyApi:
                     if not ts:
                         return None
                     try:
-                        # Handle trailing 'Z' UTC and ensure fromisoformat compatibility
-                        ts2 = ts.replace("Z", "+00:00")
-                        return datetime.fromisoformat(ts2)
+                        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
                     except Exception:
                         return None
 
@@ -128,23 +132,53 @@ class FamlyApi:
                         return "checkout"
                     return None
 
-                # Collect all candidate events for today
-                candidates = []
+                # Prefer embed.type (CHECK_IN/CHECK_OUT), then fall back to originator/type/title
+                def event_kind(ev: dict) -> Optional[str]:
+                    embed = ev.get("embed", {}) if isinstance(ev, dict) else {}
+                    et = embed.get("type")
+                    if isinstance(et, str):
+                        u = et.upper()
+                        if u == "CHECK_OUT":
+                            return "checkout"
+                        if u == "CHECK_IN":
+                            return "checkin"
+                    origin = ev.get("originator", {}) if isinstance(ev, dict) else {}
+                    t = origin.get("type") or origin.get("__typename") or ev.get("type") or ev.get("eventType")
+                    k = normalize_type(t)
+                    if not k and isinstance(ev.get("title"), str):
+                        title = ev["title"].lower()
+                        if "sjekket ut" in title or "checked out" in title:
+                            return "checkout"
+                        if "sjekket inn" in title or "checked in" in title:
+                            return "checkin"
+                    return k
+
+                # Prefer 'from' timestamp, then occurredAt/timestamp fields
+                def event_timestamp(ev: dict) -> Optional[datetime]:
+                    origin = ev.get("originator", {}) if isinstance(ev, dict) else {}
+                    ts = (
+                        ev.get("from")
+                        or origin.get("occurredAt")
+                        or ev.get("occurredAt")
+                        or origin.get("timestamp")
+                        or ev.get("timestamp")
+                    )
+                    return parse_iso(ts)
+
+                # Flatten all events from the response
+                candidates: list[dict] = []
 
                 def collect_events(container):
                     if isinstance(container, dict):
-                        # Direct events list
                         evs = container.get("events")
                         if isinstance(evs, list):
-                            for ev in evs:
-                                candidates.append(ev)
-                        # Nested days
+                            candidates.extend(evs)
                         days = container.get("days")
                         if isinstance(days, list):
                             for day in days:
-                                evs2 = day.get("events", [] )
-                                for ev in evs2:
-                                    candidates.append(ev)
+                                evs2 = day.get("events", [])
+                                if isinstance(evs2, list):
+                                    candidates.extend(evs2)
                     elif isinstance(container, list):
                         for item in container:
                             collect_events(item)
@@ -154,20 +188,17 @@ class FamlyApi:
                 latest_time: Optional[datetime] = None
                 latest_kind: Optional[str] = None
                 for ev in candidates:
-                    origin = ev.get("embed", {}) if isinstance(ev, dict) else {}
-                    t = normalize_type(origin.get("type") or origin.get("__typename") or ev.get("type") or ev.get("eventType"))
-                    if not t:
+                    kind = event_kind(ev)
+                    if not kind:
                         continue
-                    ts = ev.get("from") or ev.get("from")
-                    dt = parse_iso(ts)
+                    dt = event_timestamp(ev)
                     if not dt:
-                        # As a fallback, accept events without timestamp but do not override a dated latest
                         if latest_time is None:
-                            latest_kind = t
+                            latest_kind = kind
                         continue
                     if latest_time is None or dt > latest_time:
                         latest_time = dt
-                        latest_kind = t
+                        latest_kind = kind
 
                 _LOGGER.debug(
                     "Calendar parse: child=%s candidates=%s latest_kind=%s latest_time=%s",
@@ -179,10 +210,8 @@ class FamlyApi:
 
                 if latest_kind == "checkin":
                     return STATE_AT_CHILDCARE
-                # If no events or latest was checkout -> outside
                 return STATE_OUTSIDE_CHILDCARE
 
         except Exception:
-            # Catch ANY exception during the process and log it. This prevents the integration from crashing.
-            _LOGGER.exception(f"Error fetching calendar data for child {child_id}")
-            return None  # Return None to indicate failure
+            _LOGGER.exception("Error fetching calendar data for child %s", child_id)
+            return None
