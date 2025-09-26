@@ -201,11 +201,20 @@ class FamlyApi:
                         latest_kind = kind
 
                 _LOGGER.debug(
-                    "Calendar parse: child=%s candidates=%s latest_kind=%s latest_time=%s",
+                    "Calendar parse: child=%s candidates=%s latest_kind=%s latest_time=%s (raw_events_sample=%s)",
                     child_id,
                     len(candidates),
                     latest_kind,
                     latest_time.isoformat() if latest_time else None,
+                    [
+                        {
+                            "title": e.get("title"),
+                            "embed.type": e.get("embed", {}).get("type") if isinstance(e.get("embed"), dict) else None,
+                            "originator.type": e.get("originator", {}).get("type") if isinstance(e.get("originator"), dict) else None,
+                            "from": e.get("from"),
+                        }
+                        for e in candidates[:3]
+                    ],
                 )
 
                 if latest_kind == "checkin":

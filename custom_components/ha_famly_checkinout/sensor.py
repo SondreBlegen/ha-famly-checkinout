@@ -32,15 +32,32 @@ async def async_setup_entry(
     
     selected_children = entry.data[CONF_CHILDREN]
 
+    # Keep last known states to avoid flickering to Outside when API temporarily fails
+    last_known: dict[str, str] = {}
+
     async def async_update_data():
         """Fetch data from API for all configured children."""
         tasks = [api.get_child_status(child_id) for child_id in selected_children]
         results = await asyncio.gather(*tasks)
-        
-        if any(status is None for status in results):
-             _LOGGER.warning("Failed to retrieve status for one or more children.")
-        
-        return {child_id: status for child_id, status in zip(selected_children.keys(), results)}
+
+        data: dict[str, str] = {}
+        for child_id, status in zip(selected_children.keys(), results):
+            if status is None:
+                # Retain previous state if available
+                if child_id in last_known:
+                    data[child_id] = last_known[child_id]
+                else:
+                    data[child_id] = STATE_OUTSIDE_CHILDCARE
+            else:
+                data[child_id] = status
+                last_known[child_id] = status
+
+        if any(r is None for r in results):
+            _LOGGER.debug(
+                "One or more child status lookups failed; retaining previous states where possible. result_map=%s",
+                data,
+            )
+        return data
 
     coordinator = DataUpdateCoordinator(
         hass,
