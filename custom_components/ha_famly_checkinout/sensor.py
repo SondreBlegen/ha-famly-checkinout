@@ -7,7 +7,7 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed, CoordinatorEntity
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DOMAIN, CONF_CHILDREN, CONF_EMAIL, CONF_PASSWORD, STATE_OUTSIDE_CHILDCARE, STATE_AT_CHILDCARE
@@ -76,12 +76,12 @@ async def async_setup_entry(
     async_add_entities(sensors, True)
 
 
-class ChildcareStatusSensor(SensorEntity):
+class ChildcareStatusSensor(CoordinatorEntity, SensorEntity):
     """Representation of a Childcare Status Sensor."""
 
     def __init__(self, coordinator: DataUpdateCoordinator, entry_id: str, child_id: str, child_name: str):
         """Initialize the sensor."""
-        self.coordinator = coordinator
+        super().__init__(coordinator)
         self._child_id = child_id
         
         self._attr_name = f"Childcare Status {child_name}"
@@ -124,3 +124,16 @@ class ChildcareStatusSensor(SensorEntity):
             "childcare_present": at_childcare,
             "icon_color": "green" if at_childcare else "grey",
         }
+
+    @property
+    def should_poll(self) -> bool:  # Coordinator drives updates
+        return False
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success and self._child_id in self.coordinator.data
+
+    def _handle_coordinator_update(self) -> None:
+        # Called by CoordinatorEntity when data is refreshed
+        self.async_write_ha_state()
+        super()._handle_coordinator_update()
